@@ -1,0 +1,21 @@
+2.mkdir img
+
+mv /path/to/your/screenshot.png img/img_2.png
+
+5.mkdir docs
+
+quarto render code/quadratic.qmd --to pdf --output docs/output.pdf
+
+6.mkdir data
+
+mkdir results
+
+7.echo "1 -1 -2" \> data/coefs1.txt
+
+8.mkdir code
+
+cp beginning.qmd code/quadratic.qmd
+
+9.echo "-1 2 -1" \> data/coefs2.txt
+
+echo "-1 1 -1" \> data/coefs3.txt

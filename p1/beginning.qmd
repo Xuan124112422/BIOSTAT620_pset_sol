@@ -1,0 +1,49 @@
+---
+title: "BIOSTAT620 Pset 1"
+author: "Your Name"
+date: "`r Sys.Date()`"
+format: pdf
+execute:
+  echo: true       # Show code in the output
+  eval: true       # Ensure code is executed
+  warning: false   # Suppress warnings
+  error: false     # Stop rendering on errors
+---
+
+
+```{r eval=TRUE}
+# Define coefficients of the quadratic equation
+a <- 1
+b <- -1
+c <- -2
+
+# Calculate the discriminant
+discriminant <- b^2 - 4 * a * c
+
+# Solve the equation based on the discriminant
+if (discriminant < 0) {
+    solutions <- "no real solutions" # If discriminant < 0, no real solutions
+} else {
+    solutions <- c(
+        (-b + sqrt(discriminant)) / (2 * a), # First solution
+        (-b - sqrt(discriminant)) / (2 * a)  # Second solution
+    )
+}
+
+# Print the solutions
+print(solutions)
+```
+```{r eval=TRUE}
+# Generate a sequence of x values
+x <- seq(-5, 5, length = 100)
+
+# Define the function y = x^2 - x - 2
+y <- x^2 - x - 2
+
+# Plot the function
+plot(x, y, type = "l", main = "Graph of y = x^2 - x - 2", xlab = "x", ylab = "y")
+
+# Add the x-axis (y = 0)
+abline(h = 0, col = "red")
+```
+
