@@ -1,0 +1,225 @@
+---
+title: "Pset 03 - Data Wrangling"
+author: "Your Name"
+date: "`r Sys.Date()`"
+format: html
+execute:
+  echo: true   # Show all code
+  eval: true   # Ensure all code runs
+  warning: false
+  message: false
+---
+
+```{r eval=TRUE}
+# Load libraries for API requests, data wrangling, and visualization
+library(httr2)       # API requests
+library(tidyverse)   # Data manipulation and visualization
+library(janitor)     # Cleaning column names
+library(jsonlite)    # Handling JSON data
+library(lubridate)   # Working with date/time
+library(forcats)     # Handling categorical variables
+
+# For reproducibility, we assume the TF has a file "census-key.R" in this folder:
+source("census-key.R")  
+cat("Census key first 5 chars: ", substr(census_key, 1, 5), "\n")
+```
+
+```{r eval=TRUE}
+# 1A. Construct the request using httr2
+url <- "https://api.census.gov/data/2021/pep/population"
+
+request <- request(url) |> 
+  req_url_query(
+    get = "POP_2020,POP_2021,NAME",
+    `for` = "state:*",
+    key = census_key
+  )
+print(request)  # Verify URL
+
+# 1B. Perform the request
+response <- request |> req_perform()
+print(response)  # Check response status: should be 200 OK
+
+# 1C. Convert the response JSON into a raw matrix
+population_raw <- response |> resp_body_json(simplifyVector = TRUE)
+
+# 1D. Inspect the first few rows
+head(population_raw)
+
+```
+
+```{r eval=TRUE}
+# 2A. Turn that matrix into a tidy tibble
+population <- as_tibble(population_raw) |>
+  # Use the first row as column names: "POP_2020", "POP_2021", "NAME", "state"
+  row_to_names(1) |>
+  # Rename "NAME" -> "state_name" for clarity
+  rename(state_name = NAME) |>
+  # Pivot from wide to long: combine POP_2020, POP_2021 into year/population
+  pivot_longer(
+    cols = starts_with("POP_"),
+    names_to = "year",
+    values_to = "population"
+  ) |>
+  mutate(
+    # Convert "POP_2020" -> 2020, "POP_2021" -> 2021
+    year = as.integer(str_remove(year, "POP_")),
+    # Convert population from character to numeric
+    population = as.numeric(population)
+  )
+
+# 2B. Load state abbreviation mappings from R's built-in vectors
+state_abbreviations <- tibble(
+  state_name = state.name,
+  state      = state.abb
+)
+
+# Add DC and PR manually
+state_abbreviations <- state_abbreviations |>
+  add_row(state_name = "District of Columbia", state = "DC") |>
+  add_row(state_name = "Puerto Rico",          state = "PR")
+
+# 2C. Join abbreviations with population by matching "state_name"
+#     This ensures the final "population" has a column named "state"
+population <- population |>
+  left_join(state_abbreviations, by = "state_name")
+
+# 2D. Verify structure
+head(population)
+glimpse(population)
+
+```
+
+```{r eval=TRUE}
+# Reorder states by population for a quick bar chart
+population <- population |>
+  mutate(state_name = fct_reorder(state_name, population, .desc = TRUE))
+
+ggplot(population, aes(x = population, y = state_name, fill = factor(year))) +
+  geom_col() +
+  facet_wrap(~ year, scales = "free_x") +
+  labs(
+    title = "State Population in 2020 vs 2021",
+    x = "Population",
+    y = "State"
+  ) +
+  theme_minimal()
+
+```
+
+```{r eval=TRUE}
+# 3A. The JSON file listing states in 10 Public Health Service regions:
+regions_url <- "https://github.com/datasciencelabs/2024/raw/refs/heads/main/data/regions.json"
+regions_raw <- fromJSON(regions_url)
+
+# 3B. Transform JSON into a tibble: one row per state, with "region" and "region_name"
+regions <- as_tibble(regions_raw) |>
+  unnest(states) |>
+  rename(state_name = states) |>
+  mutate(
+    region = as.character(region),
+    region = as.factor(region)
+  )
+
+head(regions)
+# Merge region info into population by "state_name"
+# -> population now has state, region, region_name
+population <- population |>
+  left_join(regions, by = "state_name")
+
+head(population)
+glimpse(population)
+
+
+```
+
+```{r eval=TRUE}
+# 4A. Download from the CDC COVID-19 data endpoint
+cdc_url <- "https://data.cdc.gov/resource/pwn4-m3yp.json"
+covid_request <- request(cdc_url) |>
+  req_url_query(`$limit` = 10000000000) |>
+  req_perform()
+
+# 4B. Convert to a tibble
+covid_data <- covid_request |>
+  resp_body_json(simplifyVector = TRUE) |>
+  as_tibble()
+
+head(covid_data)
+# 4C. Keep only columns needed: state, end_date, new_cases
+#     Convert end_date -> Date, and also create a 'year' using lubridate::year
+covid_data <- covid_data |>
+  mutate(
+    date      = as.Date(end_date),
+    year      = year(date),
+    new_cases = as.numeric(new_cases),
+    state     = as.character(state)
+  ) |>
+  select(state, date, year, new_cases)
+
+# 4D. Filter for 2020 / 2021 if your assignment requires
+covid_data <- covid_data |>
+  filter(year %in% c(2020, 2021))
+
+head(covid_data)
+glimpse(covid_data)
+
+```
+```{r eval=TRUE}
+# -------------------------------
+# 5) Final Cleanup & Merge
+# -------------------------------
+
+# 5A) In your "population" tibble, you currently have:
+#     "state_name", "state.x" (FIPS?), "year", "population", "state.y" (abbreviation?), etc.
+#     We want a single column named "state" containing the two-letter abbreviations.
+#     So let's drop "state.x" and rename "state.y" -> "state":
+
+population <- population |>
+  select(-state.x) |>               # Remove the FIPS code if no longer needed
+  rename(state = state.y)           # The two-letter codes become "state"
+
+# 5B) Check we have (state, year, population)
+required_cols_pop <- c("state", "year", "population")
+missing_cols_pop  <- setdiff(required_cols_pop, names(population))
+if (length(missing_cols_pop) > 0) {
+  stop("Missing required columns in `population`: ",
+       paste(missing_cols_pop, collapse = ", "))
+}
+
+# 5C) Merge with covid_data on (state, year), then compute 'cases_per_100k'
+covid_population <- covid_data |>
+  left_join(population, by = c("state", "year")) |>
+  mutate(
+    cases_per_100k = (new_cases / population) * 100000
+  )
+
+# 5D) Quick checks
+dim(covid_population)
+head(covid_population)
+
+# 5E) Plot COVID-19 Cases per 100K, faceted by region_name
+ggplot(covid_population, aes(x = date, y = cases_per_100k, group = state)) +
+  geom_line(alpha = 0.2) +
+  facet_wrap(~ region_name, scales = "free_y") +
+  labs(
+    title = "COVID-19 Cases Per 100K by Region (2020-2021)",
+    x = "Date",
+    y = "Cases Per 100K",
+    caption = "Data Source: CDC & US Census"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

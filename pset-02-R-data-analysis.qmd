@@ -1,0 +1,255 @@
+---
+title: "NHANES Data Analysis"
+author: "hongye xuan"
+format: html
+editor: visual
+---
+# Set global options for Quarto document
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, warning = FALSE, message = FALSE)
+
+```{r eval=TRUE}
+# Load required libraries
+library(dplyr)   # For data manipulation
+library(tidyr)   # For data tidying
+library(forcats) # For factor manipulation
+library(ggplot2) # For data visualization
+library(knitr)   # For table formatting
+library(NHANES)  # Dataset for analysis
+
+
+```
+
+```{r eval=TRUE}
+# Filter NHANES data for survey year 2011_12 and assign to 'dat'
+dat <- NHANES |> 
+  mutate(SurveyYr = as.character(SurveyYr)) |>  # Convert SurveyYr to character
+  filter(SurveyYr == "2011_12")  # Filter for the correct survey year
+
+# Display the first few rows of the filtered dataset
+head(dat)
+
+```
+
+```{r eval=TRUE}
+# Validate that the resulting table has 5000 rows and 76 columns
+if (all(dim(dat) == c(5000, 76))) {
+  print("Validation successful: The table has 5000 rows and 76 columns.")
+} else {
+  print(paste("Validation failed: Dimensions are", paste(dim(dat), collapse = " x ")))
+}
+
+```
+
+```{r eval=TRUE}
+# Validate that the resulting table has 5000 rows and 76 columns
+# Optionally, display a summary of the filtered dataset
+summary(dat)
+
+```
+
+```{r eval=TRUE}
+#  Compute average and SD of BPSysAve by Gender
+gender_summary <- dat |> 
+  group_by(Gender) |>  # Group by Gender
+  summarise(
+    average = mean(BPSysAve, na.rm = TRUE),  # Compute mean of BPSysAve
+    SD = sd(BPSysAve, na.rm = TRUE),  # Compute standard deviation of BPSysAve
+    .groups = "drop"  # Drop grouping to avoid warning
+  )
+
+# Display the result as a table
+gender_summary
+
+```
+```{r eval=TRUE}
+# Compute average and SD of BPSysAve by Race3 and Gender
+race_gender_summary <- dat |> 
+  group_by(Gender, Race3) |>  # Group by Gender and Race3
+  summarise(
+    average = mean(BPSysAve, na.rm = TRUE),  # Compute mean of BPSysAve
+    SD = sd(BPSysAve, na.rm = TRUE),  # Compute standard deviation of BPSysAve
+    .groups = "drop"  # Drop grouping to avoid warning
+  ) |> 
+  arrange(desc(average))  # Sort by average in descending order
+
+# Display the result as a table
+race_gender_summary
+
+
+```
+
+
+```{r eval=TRUE}
+# Add 95% confidence intervals
+race_gender_ci <- dat |> 
+  group_by(Gender, Race3) |>  # Group by Gender and Race3
+  summarise(
+    average = mean(BPSysAve, na.rm = TRUE),  # Compute mean of BPSysAve
+    SD = sd(BPSysAve, na.rm = TRUE),  # Compute standard deviation of BPSysAve
+    n = sum(!is.na(BPSysAve)),  # Count non-NA values
+    lower = average - 1.96 * SD / sqrt(n),  # Lower bound of CI
+    upper = average + 1.96 * SD / sqrt(n),  # Upper bound of CI
+    .groups = "drop"  # Drop grouping to avoid warning
+  ) |> 
+  arrange(desc(average))  # Sort by average in descending order
+
+# Display the result as a table
+race_gender_ci
+
+```
+
+
+```{r eval=TRUE}
+#  Create a plot with averages and confidence intervals
+library(ggplot2)
+
+ggplot(race_gender_ci, aes(x = reorder(Race3, average), y = average, color = Race3)) +
+  geom_point(size = 3) +  # Add points for averages
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +  # Add error bars
+  facet_wrap(~ Gender) +  # Create separate panels for each Gender
+  labs(
+    title = "Comparing Systolic Blood Pressure Across Groups",
+    x = "Race", 
+    y = "Average",
+    caption = "Bars represent 95% confidence intervals"
+  ) +
+  theme_minimal()  # Use a clean minimal theme
+
+```
+
+
+```{r eval=TRUE}
+# Create a histogram of Age by Race3 and Gender
+ggplot(dat, aes(x = Age, fill = Race3)) +
+  geom_histogram(binwidth = 5, position = "identity", alpha = 0.6) +  # Bin width of 5 years
+  facet_grid(Gender ~ Race3, scales = "free_y") +  # Separate by Gender and Race3; free Y-scale
+  labs(
+    title = "Age Distribution by Race3 and Gender",
+    x = "Age (years)",
+    y = "Count",
+    caption = "Each row represents a Gender; Y-scales are free for each facet"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")  # Place legend at the bottom
+
+```
+
+```{r eval=TRUE}
+# Discussion:
+# The histogram shows clear differences in age distributions across Race3 groups:
+# 1. White: The age distribution is skewed towards older age groups, with a significant proportion of individuals aged 40 years and above. This pattern is consistent for both males and females.
+# 2. Mexican: The age distribution is skewed towards younger age groups, with most individuals below the age of 30. There is a noticeable decline in representation among older cohorts (60 years and above).
+# 3. Hispanic: The distribution appears more balanced but still leans younger compared to the White population.
+#
+# Implications:
+# - Age is likely a confounder in the relationship between Race3 and systolic blood pressure (SBP). The higher SBP observed in the White group may be attributed to their older age profile rather than intrinsic differences.
+# - Conversely, the younger age profile of the Mexican group likely explains their comparatively lower SBP levels.
+#
+# Suggestions for Further Analysis:
+# - Stratify by age groups to compare SBP within similar age brackets across Race3 groups.
+# - Incorporate age as a covariate in a regression model to adjust for its confounding effects.
+
+```
+
+
+
+```{r eval=TRUE}
+# Compute median age and percent under 18 by Race3
+age_summary <- dat |> 
+  group_by(Race3) |>  # Group by Race3
+  summarise(
+    median_age = median(Age, na.rm = TRUE),  # Calculate median age
+    children = 100 * mean(Age < 18, na.rm = TRUE),  # Calculate percentage of individuals under 18
+    .groups = "drop"  # Drop grouping to avoid warning
+  ) |> 
+  arrange(median_age)  # Order by median age in ascending order
+
+# Display the result
+age_summary
+
+```
+
+```{r eval=TRUE}
+# Compute average BPS by AgeDecade, Race3, and Gender
+bps_summary <- dat |> 
+  filter(!is.na(AgeDecade) & !is.na(BPSysAve)) |>  # Remove rows with missing AgeDecade or BPSysAve
+  group_by(Gender, AgeDecade, Race3) |>  # Group by Gender, AgeDecade, and Race3
+  summarise(
+    average_bps = mean(BPSysAve, na.rm = TRUE),  # Calculate the average BPS
+    .groups = "drop"  # Drop grouping to avoid warnings
+  )
+
+# Create the plot
+ggplot(bps_summary, aes(x = AgeDecade, y = average_bps, color = Race3, group = Race3)) +
+  geom_line(linewidth = 1) +  # Use linewidth instead of size
+  geom_point(size = 3) +  # Add points for average BPS
+  facet_wrap(~ Gender) +  # Create separate plots for males and females
+  labs(
+    title = "Average BPS by Age Decade and Race Group",
+    x = "Age Decade",
+    y = "Average BPS",
+    color = "Race Group"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for better readability
+
+
+```
+
+```{r eval=TRUE}
+# Filter data for two groups (e.g., White and Mexican)
+selected_groups <- bps_summary |> 
+  filter(Race3 %in% c("White", "Mexican"))  # Replace with chosen groups
+
+# Compute confidence intervals for the selected groups
+bps_with_ci <- dat |> 
+  filter(!is.na(AgeDecade) & !is.na(BPSysAve) & Race3 %in% c("White", "Mexican")) |>  # Filter for selected groups
+  group_by(Gender, AgeDecade, Race3) |>  # Group by Gender, AgeDecade, and Race3
+  summarise(
+    average_bps = mean(BPSysAve, na.rm = TRUE),  # Calculate mean BPS
+    SD = sd(BPSysAve, na.rm = TRUE),  # Standard deviation
+    n = sum(!is.na(BPSysAve)),  # Count non-NA observations
+    lower = average_bps - 1.96 * SD / sqrt(n),  # Lower bound of CI
+    upper = average_bps + 1.96 * SD / sqrt(n),  # Upper bound of CI
+    .groups = "drop"  # Drop grouping to avoid warning
+  )
+
+# Create a plot with confidence intervals
+ggplot(bps_with_ci, aes(x = AgeDecade, y = average_bps, color = Race3)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +  # Add points, dodge for separation
+  geom_errorbar(aes(ymin = lower, ymax = upper), position = position_dodge(width = 0.5), width = 0.2) +  # Add error bars
+  facet_wrap(~ Gender) +  # Separate by Gender
+  labs(
+    title = "Average BPS with Confidence Intervals (White vs. Mexican)",
+    x = "Age Decade",
+    y = "Average BPS",
+    color = "Race Group"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r eval=TRUE}
+# Compute the difference in average SBP between the two groups for each age stratum
+sbp_difference <- bps_summary |> 
+  filter(Race3 %in% c("White", "Mexican")) |>  # Filter for the selected groups
+  pivot_wider(
+    names_from = Race3, 
+    values_from = average_bps, 
+    names_prefix = "SBP_"
+  ) |>  # Reshape data to create separate columns for White and Mexican
+  mutate(
+    difference = SBP_White - SBP_Mexican  # Compute difference between the two groups
+  ) |> 
+  select(Gender, AgeDecade, difference) |>  # Keep only relevant columns
+  pivot_wider(
+    names_from = Gender, 
+    values_from = difference, 
+    names_prefix = "Difference_"
+  )  # Reshape to create separate columns for males and females
+
+# Display the result
+sbp_difference
+
+```
