@@ -1,0 +1,318 @@
+---
+title: "Pset 04 - Data Visualization"
+author: "Your Name"
+date: "`r Sys.Date()`"
+format: html
+execute:
+  echo: true   # Show all code
+  eval: true   # Ensure all code runs
+  warning: false
+  message: false
+---
+
+```{r eval=TRUE}
+# Load necessary R libraries
+library(httr2)
+library(jsonlite)
+library(tidyverse)
+library(lubridate)
+
+# Create a data directory if it does not exist
+if (!dir.exists("./data")) dir.create("./data")
+
+# Function to fetch CDC data from API
+get_cdc_data <- function(endpoint) {
+    api_url <- paste0("https://data.cdc.gov/resource/", endpoint, ".json")
+    response <- request(api_url) |>
+        req_url_query(`$limit` = 10000000) |> # Set large enough limit
+        req_perform()
+
+    if (resp_status(response) == 200) {
+        df <- response |> resp_body_json(simplifyVector = TRUE) |> as_tibble()
+        return(df)
+    } else {
+        stop("Failed to fetch data from API: ", api_url)
+    }
+}
+
+# Download datasets
+cases_raw  <- get_cdc_data("pwn4-m3yp")  # COVID-19 cases
+hosp_raw   <- get_cdc_data("39z2-9zu6")  # Hospitalizations
+deaths_raw <- get_cdc_data("r8kw-7aab")  # Deaths
+vax_raw    <- get_cdc_data("rh2h-3yt2")  # Vaccination data
+
+# Save raw data
+save(cases_raw, hosp_raw, deaths_raw, vax_raw, file = "./data/cdc_data.RDA")
+
+```
+
+```{r eval=TRUE}
+# 下载 COVID-19 相关数据
+cases_raw  <- get_cdc_data("pwn4-m3yp")  # COVID-19 cases
+hosp_raw   <- get_cdc_data("39z2-9zu6")  # Hospitalizations
+deaths_raw <- get_cdc_data("r8kw-7aab")  # Deaths
+vax_raw    <- get_cdc_data("rh2h-3yt2")  # Vaccination data
+
+# 保存原始数据
+save(cases_raw, hosp_raw, deaths_raw, vax_raw, file = "./data/cdc_data.RDA")
+
+```
+
+```{r eval=TRUE}
+# Load population data
+population <- read_csv("./data/population_data.csv")
+
+# Create a mapping for state abbreviations
+state_mapping <- data.frame(
+    full = state.name,
+    abbr = state.abb
+) %>%
+    bind_rows(data.frame(full = "District of Columbia", abbr = "DC")) %>%
+    bind_rows(data.frame(full = "Puerto Rico", abbr = "PR"))
+
+# Standardize state names in population data
+population <- population %>%
+    left_join(state_mapping, by = c("state" = "full")) %>%
+    mutate(state = ifelse(is.na(abbr), state, abbr)) %>%
+    select(-abbr) %>%
+    filter(mmwr_year %in% c(2020, 2021))
+
+```
+
+```{r eval=TRUE}
+hosp <- hosp %>%
+  mutate(new_covid_19_hospital = as.numeric(new_covid_19_hospital),
+         date  = as_date(collection_date),
+         mmwr_year = epiyear(date),
+         mmwr_week = epiweek(date)) %>%
+  filter(mmwr_year %in% c(2020, 2021)) %>%
+  group_by(state, mmwr_year, mmwr_week) %>%
+  summarise(hosp = sum(new_covid_19_hospital, na.rm = TRUE), .groups = "drop")
+
+```
+
+```{r eval=TRUE}
+cases <- cases_raw %>%
+    mutate(
+        end_date = as_date(substr(end_date, 1, 10)),  # 转换 end_date 为日期格式
+        mmwr_year = epiyear(end_date),  # 计算 MMWR 年
+        mmwr_week = epiweek(end_date),  # 计算 MMWR 周
+        new_cases = as.numeric(new_cases)  # 转换 new_cases 为数值型
+    ) %>%
+    filter(mmwr_year %in% c(2020, 2021)) %>%  # 仅保留 2020 和 2021 年的数据
+    group_by(state, mmwr_year, mmwr_week) %>%  # 按州、年份和周分组
+    summarise(cases = sum(new_cases, na.rm = TRUE), .groups = "drop")  # 计算每周的新增病例总数
+
+```
+
+```{r eval=TRUE}
+# Process deaths data
+deaths <- deaths_raw %>%
+    mutate(
+        end_date = as_date(substr(end_date, 1, 10)),  # 转换日期格式
+        mmwr_year = epiyear(end_date),  # 计算 MMWR 年
+        mmwr_week = epiweek(end_date),  # 计算 MMWR 周
+        covid_19_deaths = as.numeric(covid_19_deaths)  # 确保数值型
+    ) %>%
+    filter(mmwr_year %in% c(2020, 2021)) %>%  # 仅保留 2020 和 2021 年的数据
+    group_by(state, mmwr_year, mmwr_week) %>%  # 按州、年份和周分组
+    summarise(deaths = sum(covid_19_deaths, na.rm = TRUE), .groups = "drop")  # 计算每周死亡总数
+
+```
+
+```{r eval=TRUE}
+# Process vaccination data
+vax <- vax_raw %>%
+    filter(date_type == "Admin") %>%
+    rename(state = location) %>%
+    mutate(
+        date = as_date(substr(date, 1, 10)),
+        mmwr_year = epiyear(date),
+        mmwr_week = epiweek(date),
+        series_complete_cumulative = as.numeric(series_complete_cumulative),
+        booster_cumulative = as.numeric(booster_cumulative)
+    ) %>%
+    filter(mmwr_year %in% c(2020, 2021)) %>%
+    group_by(state, mmwr_year, mmwr_week) %>%
+    summarise(
+        vax = max(series_complete_cumulative, na.rm = TRUE),
+        booster = max(booster_cumulative, na.rm = TRUE),
+        .groups = "drop"
+    )
+
+
+```
+
+```{r eval=TRUE}
+# Create full weekly date reference
+all_dates <- data.frame(date = seq(make_date(2020, 1, 25),
+                                   make_date(2021, 12, 31), 
+                                   by = "week")) |>
+  mutate(date = ceiling_date(date, unit = "week", week_start = 7) - days(1)) |>
+  mutate(mmwr_year = epiyear(date), mmwr_week = epiweek(date))
+
+# Merge datasets
+dat <- full_join(all_dates, cases, by = c("mmwr_year", "mmwr_week")) %>%
+    full_join(hosp, by = c("state", "mmwr_year", "mmwr_week")) %>%
+    full_join(deaths, by = c("state", "mmwr_year", "mmwr_week")) %>%
+    full_join(vax, by = c("state", "mmwr_year", "mmwr_week")) %>%
+    left_join(population, by = c("state", "mmwr_year"))
+
+# Fill missing values with 0
+dat <- dat %>%
+    mutate(across(c(cases, hosp, deaths, vax, booster), ~ replace_na(., 0)))
+
+# Save final dataset
+save(dat, file = "./data/final_data.RDA")
+
+
+```
+
+```{r eval=TRUE}
+# Load necessary libraries
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# Load final dataset
+load("./data/final_data.RDA")
+
+# Compute cases, hospitalizations, and deaths per 100,000 people
+dat <- dat %>%
+    mutate(
+        cases_per_100k = (cases / population) * 100000,
+        hosp_per_100k = (hosp / population) * 100000,
+        deaths_per_100k = (deaths / population) * 100000
+    )
+
+# Reshape data to long format for ggplot
+dat_long <- dat %>%
+    pivot_longer(cols = c(cases_per_100k, hosp_per_100k, deaths_per_100k),
+                 names_to = "metric",
+                 values_to = "count")
+
+# Plot trends for cases, hospitalizations, and deaths
+ggplot(dat_long, aes(x = date, y = count, color = metric)) +
+    geom_line() +
+    facet_wrap(~ state, scales = "free_y") +  # Separate plots for each state
+    theme_minimal() +
+    labs(title = "COVID-19 Trends by State",
+         x = "Date",
+         y = "Cases / Hospitalizations / Deaths per 100K",
+         color = "Metric") +
+    scale_color_manual(values = c("cases_per_100k" = "blue", 
+                                  "hosp_per_100k" = "red", 
+                                  "deaths_per_100k" = "black"))
+
+```
+
+```{r eval=TRUE}
+# Compute total vaccinations and boosters in the U.S.
+us_vax <- dat %>%
+    group_by(date) %>%
+    summarise(
+        total_vax = sum(vax, na.rm = TRUE),
+        total_booster = sum(booster, na.rm = TRUE),
+        total_pop = sum(population, na.rm = TRUE)
+    ) %>%
+    mutate(
+        vax_rate = total_vax / total_pop * 100,
+        booster_rate = total_booster / total_pop * 100
+    )
+
+# Plot vaccination and booster trends
+ggplot(us_vax, aes(x = date)) +
+    geom_line(aes(y = vax_rate, color = "Vaccination Rate")) +
+    geom_line(aes(y = booster_rate, color = "Booster Rate")) +
+    theme_minimal() +
+    labs(title = "U.S. Vaccination and Booster Rate Trends",
+         x = "Date",
+         y = "Percentage (%)",
+         color = "Category")
+
+```
+
+```{r eval=TRUE}
+# Filter data for July 1, 2021
+july1_vax <- dat %>%
+    filter(date == "2021-07-01") %>%
+    mutate(vax_rate = vax / population * 100)
+
+# Plot histogram of vaccination rates across states
+ggplot(july1_vax, aes(x = vax_rate)) +
+    geom_histogram(binwidth = 5, fill = "steelblue", color = "white") +
+    theme_minimal() +
+    labs(title = "Distribution of Vaccination Rates Across States (July 1, 2021)",
+         x = "Vaccination Rate (%)",
+         y = "Number of States")
+
+```
+
+```{r eval=TRUE}
+# Assign states to regions
+dat_region <- dat %>%
+    mutate(region = case_when(
+        state %in% c("CT", "ME", "MA", "NH", "RI", "VT", "NY", "NJ", "PA") ~ "Northeast",
+        state %in% c("IL", "IN", "MI", "OH", "WI", "IA", "KS", "MN", "MO", "NE", "ND", "SD") ~ "Midwest",
+        state %in% c("DE", "FL", "GA", "MD", "NC", "SC", "VA", "DC", "WV", "AL", "KY", "MS", "TN") ~ "South",
+        state %in% c("AZ", "CA", "CO", "ID", "MT", "NV", "NM", "OR", "UT", "WA", "WY", "HI", "AK") ~ "West"
+    )) %>%
+    group_by(region, date) %>%
+    summarise(
+        total_vax = sum(vax, na.rm = TRUE),
+        total_pop = sum(population, na.rm = TRUE)
+    ) %>%
+    mutate(vax_rate = total_vax / total_pop * 100)
+
+# Plot vaccination rate trends by region
+ggplot(dat_region, aes(x = date, y = vax_rate, color = region)) +
+    geom_line() +
+    theme_minimal() +
+    labs(title = "Regional Differences in Vaccination Rates",
+         x = "Date",
+         y = "Vaccination Rate (%)",
+         color = "Region")
+
+```
+
+```{r eval=TRUE}
+# Select pandemic peak period: July 1 - Sept 30, 2021
+selected_period <- dat %>%
+    filter(date >= "2021-07-01" & date <= "2021-09-30") %>%
+    group_by(state) %>%
+    summarise(
+        deaths_per_100k = sum(deaths, na.rm = TRUE) / sum(population, na.rm = TRUE) * 100000,
+        vax_rate = max(vax / population * 100, na.rm = TRUE)
+    )
+
+# Scatter plot: vaccination rate vs. COVID-19 deaths
+ggplot(selected_period, aes(x = vax_rate, y = deaths_per_100k)) +
+    geom_point() +
+    geom_smooth(method = "lm", color = "red") +
+    theme_minimal() +
+    labs(title = "Vaccination Rate vs. COVID-19 Deaths (Peak Period)",
+         x = "Vaccination Rate (%)",
+         y = "Deaths per 100K")
+
+```
+
+```{r eval=TRUE}
+# Compute booster rate vs. COVID-19 deaths
+selected_period_booster <- dat %>%
+    filter(date >= "2021-07-01" & date <= "2021-09-30") %>%
+    group_by(state) %>%
+    summarise(
+        deaths_per_100k = sum(deaths, na.rm = TRUE) / sum(population, na.rm = TRUE) * 100000,
+        booster_rate = max(booster / population * 100, na.rm = TRUE)
+    )
+
+# Scatter plot: booster rate vs. COVID-19 deaths
+ggplot(selected_period_booster, aes(x = booster_rate, y = deaths_per_100k)) +
+    geom_point() +
+    geom_smooth(method = "lm", color = "blue") +
+    theme_minimal() +
+    labs(title = "Booster Rate vs. COVID-19 Deaths",
+         x = "Booster Rate (%)",
+         y = "Deaths per 100K")
+
+```
