@@ -1,0 +1,529 @@
+---
+title: "Pset 06 "
+author: "hongye xuan"
+date: "`r Sys.Date()`"
+format: html
+execute:
+  echo: true   # Show all code
+  eval: true   # Ensure all code runs
+  warning: false
+  message: false
+---
+
+```{r eval=TRUE}
+#| label: p1
+library(tidyverse)
+
+# Load the dataset
+url <- "https://raw.githubusercontent.com/dmcable/BIOSTAT620/refs/heads/main/data/president_polls.csv"
+raw_dat <- read_csv(url)
+
+# Display the structure of the dataset
+glimpse(raw_dat)
+raw_dat <- raw_dat %>%
+  mutate(candidate_name = str_trim(candidate_name))  # Remove leading/trailing spaces
+
+# Extract unique values of poll_id, question_id, population, and candidate_name
+raw_dat %>%
+  select(poll_id, question_id, population, candidate_name) %>%
+  head(20)
+
+
+```
+
+```{r eval=TRUE}
+#| label: p2
+library(tidyverse)
+
+dat <- raw_dat %>%
+  # Remove exit polls (population == "v")
+  filter(population != "v") %>%
+  
+  # Convert population to an ordered factor
+  mutate(population = factor(population, levels = c("lv", "rv", "a"), ordered = TRUE)) %>%
+  
+  # Remove hypothetical polls
+  filter(hypothetical == FALSE) %>%
+  
+  # Convert date columns to Date format
+  mutate(
+    start_date = as.Date(start_date, format = "%m/%d/%y"),
+    end_date = as.Date(end_date, format = "%m/%d/%y")
+  )
+
+# Check the result
+glimpse(dat)
+
+
+```
+
+```{r eval=TRUE}
+#| label: p3
+library(tidyverse)
+
+dat <- dat %>%
+  # Count the number of candidates per question_id
+  group_by(poll_id, question_id) %>%
+  mutate(n = n()) %>%
+  ungroup()
+
+# Check the result
+dat %>%
+  select(poll_id, question_id, candidate_name, n) %>%
+  arrange(poll_id, question_id) %>%
+  head(10)
+
+```
+
+```{r eval=TRUE}
+#| label: p4
+library(tidyverse)
+
+dat <- raw_dat %>%
+  # Keep only rows related to Kamala Harris and Donald Trump
+  filter(candidate_name %in% c("Kamala Harris", "Donald Trump")) %>%
+
+  # Select only relevant columns needed for pivot_wider()
+  select(poll_id, question_id, state, pollster, start_date, end_date, 
+         numeric_grade, sample_size, candidate_name, pct) %>%
+
+  # Pivot the dataset to have separate columns for Harris and Trump
+  pivot_wider(names_from = candidate_name, values_from = pct, 
+              names_prefix = "pct_") %>%
+
+  # Rename columns to avoid space issues in names
+  rename(
+    pct_Kamala_Harris = `pct_Kamala Harris`,
+    pct_Donald_Trump = `pct_Donald Trump`
+  ) %>%
+
+  # Compute the spread (difference in popular vote percentages) as a proportion
+  mutate(
+    spread = (pct_Kamala_Harris - pct_Donald_Trump) / 100,  # Store as proportion
+    spread_percentage = spread * 100  # Convert back to percentage for reporting
+  )
+
+# Display the structure of the dataset
+glimpse(dat)
+
+# Show the first 10 rows to verify correctness
+head(dat, 10)
+
+```
+
+```{r eval=TRUE}
+#| label: p5
+library(tidyverse)
+
+dat <- raw_dat %>%
+  # Keep only Harris and Trump data
+  filter(candidate_name %in% c("Kamala Harris", "Donald Trump")) %>%
+
+  # Keep only necessary columns, including population
+  select(poll_id, question_id, state, pollster, start_date, end_date, 
+         numeric_grade, sample_size, population, candidate_name, pct) %>%
+
+  # Pivot the dataset so Harris and Trump percentages are separate columns
+  pivot_wider(names_from = candidate_name, values_from = pct, 
+              names_prefix = "pct_") %>%
+
+  # Count the number of candidates per question
+  group_by(poll_id, question_id) %>%
+  mutate(n = n()) %>%
+  ungroup() %>%
+
+  # Order population as factor: lv > rv > a
+  mutate(population = factor(population, levels = c("lv", "rv", "a"), ordered = TRUE)) %>%
+
+  # Keep only one question per poll: prioritize lv > rv > a, then smallest n
+  group_by(poll_id) %>%
+  arrange(population, n) %>%
+  slice(1) %>%
+  ungroup() %>%
+
+  # Remove unnecessary columns
+  select(-n, -poll_id, -question_id)
+
+# Display the structure of the cleaned dataset
+glimpse(dat)
+
+# Show first 10 rows to verify correctness
+head(dat, 10)
+
+```
+
+```{r eval=TRUE}
+#| label: p6
+library(tidyverse)
+
+# Separate national popular vote polls (state is NA)
+popular_vote <- dat %>%
+  filter(is.na(state))
+
+# Separate state-level polls (state is not NA)
+polls <- dat %>%
+  filter(!is.na(state))
+
+# Display structure of both datasets
+glimpse(popular_vote)
+glimpse(polls)
+
+# Show first few rows to verify correctness
+head(popular_vote, 10)
+head(polls, 10)
+
+```
+
+```{r eval=TRUE}
+#| label: p7
+# 加载必要的库
+library(tidyverse)
+library(lubridate)
+# 1️⃣ Ensure `spread` and `spread_percentage` exist
+popular_vote <- popular_vote %>%
+  mutate(
+    start_date = mdy(end_date),  # Convert `end_date` to Date format
+    spread = (`pct_Kamala Harris` - `pct_Donald Trump`) / 100,  # Convert to proportion
+    spread_percentage = spread * 100  # Convert back to percentage
+  )
+
+# 1️⃣ 过滤数据：仅保留 2024 年 7 月 21 日之后的 likely/registered voters
+filtered_data <- popular_vote %>%
+  mutate(start_date = as.Date(start_date)) %>%  # 确保日期格式正确
+  filter(start_date > make_date(2024, 7, 21) & population != "a") 
+
+# 2️⃣ 统计 `pollster` 出现次数，少于 5 次的合并为 "Other"
+pollster_counts <- filtered_data %>%
+  count(pollster) %>%
+  mutate(pollster_new = ifelse(n < 5, "Other", pollster))  # 生成新变量 pollster_new
+
+# 3️⃣ 重新合并 `pollster` 信息，并用新变量替换
+filtered_data <- filtered_data %>%
+  left_join(pollster_counts, by = "pollster") %>%  # 关联 pollster_counts
+  mutate(pollster = pollster_new) %>%  # 替换原始 pollster
+  select(-pollster_new, -n)  # 删除不必要的列
+
+# 4️⃣ 移除 `NA` 或 `Inf` 的 spread_percentage 值
+filtered_data <- filtered_data %>%
+  filter(!is.na(spread_percentage) & is.finite(spread_percentage))
+
+# 5️⃣ 画图
+ggplot(filtered_data, aes(x = start_date, y = spread_percentage, color = pollster)) +
+  geom_point(alpha = 0.7, size = 3) +  # 透明度 & 大小
+  geom_smooth(method = "loess", span = 0.75, se = FALSE, linewidth = 1.2) +  # 适度平滑曲线
+  facet_wrap(~population) +  # 按 likely voters / registered voters 分开
+  labs(
+    title = "Popular Vote Spread by Pollster (After July 21, 2024)",
+    x = "Start Date",
+    y = "Spread (%)",
+    color = "Pollster"
+  ) +
+  ylim(-10, 10) +  # 调整 Y 轴范围
+  theme_minimal()
+```
+
+```{r eval=TRUE}
+library(tidyverse)
+library(lubridate)
+
+# Filter data: only likely voters (`lv`) after July 21, 2024
+filtered_data <- popular_vote %>%
+  filter(start_date > make_date(2024, 7, 21) & population == "lv") %>%
+  mutate(
+    spread = `pct_Kamala Harris` - `pct_Donald Trump`
+  )
+
+# Count number of polls per pollster
+pollster_counts <- filtered_data %>%
+  count(pollster) %>%
+  mutate(pollster_new = ifelse(n < 5, "Other", pollster))  # Rename pollsters with <5 polls as "Other"
+
+# Merge updated pollster names correctly
+filtered_data <- filtered_data %>%
+  left_join(pollster_counts %>% select(pollster, pollster_new), by = "pollster") %>%
+  mutate(pollster = coalesce(pollster_new, pollster)) %>%  # Use renamed pollster names
+  select(-pollster_new)  # Remove helper column
+
+# Check if pollster renaming worked
+table(filtered_data$pollster)
+
+# Boxplot to visualize pollster effect
+ggplot(filtered_data, aes(x = fct_reorder(pollster, spread, median), y = spread, fill = pollster)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +  # Hide outliers for cleaner visualization
+  geom_jitter(width = 0.2, alpha = 0.5) +  # Add jittered points to show individual data
+  labs(
+    title = "Pollster Effect on Popular Vote Spread (Likely Voters, After July 21, 2024)",
+    x = "Pollster",
+    y = "Spread (%)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate pollster labels for readability
+
+```
+
+```{r eval=TRUE}
+#| label: p89
+same_birthday <- function(n) {
+  # Generate n random birthdays (assuming no one is born on February 29)
+  birthdays <- sample(1:365, n, replace = TRUE)  
+  
+  # Check if there are duplicate birthdays in the generated sample
+  result <- any(duplicated(birthdays))  
+  
+  # Print the generated birthdays and whether there is a duplicate
+  print(birthdays)  
+  print(paste("Are there duplicate birthdays?", result))  
+  
+  # Return the result
+  return(result)  
+}
+
+cat("Harris received a popular vote spread of -1.5% vs. Trump in the 2024 election.\n")
+cat("Our model's median predicted spread was", summary(filtered_data$spread)["Median"], "%.\n")
+cat("Possible reasons for the discrepancy include:\n")
+cat("- Systematic polling bias overestimating Harris's support.\n")
+cat("- Differences in actual vs. predicted voter turnout.\n")
+cat("- Late shifts in undecided voters favoring Trump.\n")
+cat("- Sampling bias underestimating certain voter groups.\n")
+cat("- Polls conducted too early, missing last-minute changes.\n")
+
+```
+
+```{r eval=TRUE}
+#| label: p10
+library(rvest)
+library(dplyr)
+library(stringr)
+
+# Define the URL
+url <- "https://state.1keydata.com/state-electoral-votes.php"
+
+# Read and extract the tables
+h <- read_html(url) |> html_table(fill = TRUE)
+
+# Extract the relevant table
+ev <- h[[4]]
+
+# Inspect the first few rows
+print(head(ev))
+
+# Select only the state and electoral votes columns
+ev <- ev[, c(2, 3)]
+colnames(ev) <- c("state", "electoral_votes")
+
+# Remove unwanted rows and clean data
+ev <- ev %>%
+  filter(!grepl("Rank|Number of Electoral Votes", state)) %>%
+  mutate(
+    state = str_trim(state),  # Remove extra whitespace
+    electoral_votes = str_replace_all(electoral_votes, "[^0-9]", ""),  # Remove non-numeric characters
+    electoral_votes = as.numeric(electoral_votes)  # Convert to numeric
+  )
+
+# Add electoral votes for special districts
+extra_ev <- data.frame(
+  state = c("Maine CD-1", "Maine CD-2", "Nebraska CD-2", "District of Columbia"),
+  electoral_votes = c(1, 1, 1, 3)
+)
+
+# Combine datasets
+ev <- bind_rows(ev, extra_ev)
+
+# Print cleaned data
+print(ev)
+
+```
+
+```{r eval=TRUE}
+#| label: p11
+library(gsheet)
+library(dplyr)
+library(janitor)
+library(stringr)
+
+# Download the 2020 election results
+sheet_url <- "https://docs.google.com/spreadsheets/d/1D-edaVHTnZNhVU840EPUhz3Cgd7m39Urx7HM8Pq6Pus/edit?gid=29622862"
+raw_res_2020 <- gsheet2tbl(sheet_url)
+
+# Inspect the first few rows to understand the structure
+print(head(raw_res_2020))
+
+# Select relevant columns: state and winning party
+res_2020 <- raw_res_2020[, c(1, 4)] |> 
+  row_to_names(row_number = 1) |>  # Use the first row as column names
+  rename(state = 1, party = 2) |>  # Rename columns
+  mutate(
+    state = str_trim(state),   # Remove extra spaces
+    party = case_when(
+      str_detect(party, "Democrat") ~ "D",
+      str_detect(party, "Republican") ~ "R",
+      TRUE ~ party  # Keep any unexpected values for debugging
+    )
+  )
+
+# Add missing districts manually
+extra_states <- data.frame(
+  state = c("Maine CD-1", "Maine CD-2", "Nebraska CD-2", "District of Columbia"),
+  party = c("D", "R", "D", "D")
+)
+
+# Combine datasets
+res_2020 <- bind_rows(res_2020, extra_states)
+
+# Print cleaned dataset
+print(res_2020)
+
+```
+
+```{r eval=TRUE}
+#| label: p12
+library(dplyr)
+library(lubridate)
+
+# Ensure that start_date is in the proper Date format
+polls <- polls %>%
+  mutate(start_date = mdy(start_date))  # Convert from string to Date format
+
+# Merge with the electoral_votes dataset
+polls <- polls %>%
+  left_join(ev, by = "state")
+
+# Define a period (example: last week of 2024)
+results <- polls %>%
+  filter(start_date >= make_date(2024, 7, 21)) %>%  # Define your time period here
+  
+  # Calculate spread as a proportion
+  mutate(spread = (`pct_Kamala Harris` - `pct_Donald Trump`) / 100) %>% 
+  
+  # Prioritize polls based on population and numeric_grade
+  # Example: Keep only likely voters (lv) and registered voters (rv), prioritize based on numeric_grade
+  filter(population %in% c("lv", "rv")) %>%
+  group_by(state) %>%
+  
+  # Calculate avg (mean), sd (standard deviation), and n (number of polls)
+  summarise(
+    avg = mean(spread, na.rm = TRUE),
+    sd = sd(spread, na.rm = TRUE),
+    n = n(),
+    electoral_votes = unique(electoral_votes)[1]  # Assuming only one value for each state
+  ) %>%
+  
+  # Handle cases where there are fewer than 5 polls (estimate SD based on similar states)
+  mutate(
+    sd = ifelse(n < 5, mean(sd, na.rm = TRUE), sd)  # Replace SD with the mean if fewer than 5 polls
+  ) %>%
+  
+  # Arrange by state
+  ungroup() %>%
+  arrange(state)
+
+# Display the results
+print(results)
+
+```
+
+```{r eval=TRUE}
+# Create a data frame with state names and their electoral votes.
+electoral_votes_data <- data.frame(
+  state = c(
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "District of Columbia", "Florida", "Georgia", 
+    "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", 
+    "Louisiana", "Maine CD-1", "Maine CD-2", "Maryland", "Massachusetts", 
+    "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", 
+    "Nebraska CD-2", "Nevada", "New Hampshire", "New Jersey", "New Mexico", 
+    "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", 
+    "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", 
+    "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", 
+    "Wisconsin", "Wyoming"
+  ),
+  electoral_votes = c(
+    9, 3, 11, 6, 55, 9, 7, 3, 3, 29, 16, 4, 4, 20, 11, 6, 6, 8, 8, 1, 1, 10, 11, 16,
+    10, 6, 10, 3, 4, 1, 6, 4, 14, 5, 29, 15, 3, 18, 7, 7, 20, 4, 9, 3, 11, 38, 6, 3, 13,
+    12, 5, 10, 3
+  )
+)
+
+# Print the data frame to confirm that the number of rows match
+print(electoral_votes_data)
+
+```
+
+```{r eval=TRUE}
+library(dplyr)
+library(ggplot2)
+
+# Compute the standard error for each state's poll outcome (spread is saved as a proportion)
+results <- results %>%
+  mutate(se = sd / sqrt(n))
+
+# Estimate overall mean (mu) and between-state variance (tau^2) using the observed averages
+mu <- mean(results$avg, na.rm = TRUE)
+tau2 <- var(results$avg, na.rm = TRUE)
+
+# Compute the posterior mean and posterior standard deviation for each state
+results <- results %>%
+  mutate(
+    weight = tau2 / (tau2 + se^2),                # Posterior weight for the observed average
+    post_mean = weight * avg + (1 - weight) * mu,   # Posterior mean (shrinkage estimate)
+    post_sd = sqrt(tau2 * se^2 / (tau2 + se^2))      # Posterior standard deviation
+  )
+
+# Plot posterior mean vs. observed average with point size proportional to the number of polls
+ggplot(results, aes(x = avg, y = post_mean, size = n)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    x = "Observed Average Spread (proportion)",
+    y = "Posterior Mean Spread (proportion)",
+    size = "Number of Polls",
+    title = "Posterior Means vs. Observed Averages by State"
+  ) +
+  theme_minimal()
+
+```
+
+```{r eval=TRUE}
+library(dplyr)
+library(ggplot2)
+
+# (Assuming 'results' already exists with columns: state, avg, sd, n, electoral_votes)
+# Make sure outcomes (spread) are stored as proportions
+
+# Compute win probabilities safely: if sd is NA or zero, use a deterministic value based on avg.
+results <- results %>%
+  mutate(win_prob = ifelse(is.na(sd) | sd == 0,
+                           ifelse(avg > 0, 1, ifelse(avg < 0, 0, 0.5)),
+                           pnorm(avg / sd)))
+
+# Set seed for reproducibility and simulate outcomes
+set.seed(123)
+n_sim <- 10000
+sim_votes <- replicate(n_sim, {
+  # For each state, simulate a win (1) with probability win_prob, or loss (0)
+  wins <- rbinom(n = nrow(results), size = 1, prob = results$win_prob)
+  # Sum electoral votes from states where Harris wins
+  sum(wins * results$electoral_votes, na.rm = TRUE)
+})
+
+# Remove any NA values if present (shouldn't be, but for safety)
+sim_votes <- sim_votes[!is.na(sim_votes)]
+
+# Compute the predicted electoral votes and 95% interval
+predicted_votes <- mean(sim_votes)
+ci_lower <- quantile(sim_votes, 0.025, na.rm = TRUE)
+ci_upper <- quantile(sim_votes, 0.975, na.rm = TRUE)
+
+# Print the simulation results
+cat("Predicted electoral votes for Harris:", round(predicted_votes), "\n")
+cat("95% Confidence Interval: (", round(ci_lower), ",", round(ci_upper), ")\n\n")
+
+# Short answer in English:
+cat("Short Answer:\n")
+cat("Harris received 226 electoral votes in the 2024 election. Our model predicted", 
+    round(predicted_votes), "electoral votes with a 95% confidence interval from", 
+    round(ci_lower), "to", round(ci_upper), ".\n")
+cat("Possible explanations for discrepancies include polling biases, turnout misestimations, ",
+    "and late shifts in voter sentiment in key states.\n")
+
+```
