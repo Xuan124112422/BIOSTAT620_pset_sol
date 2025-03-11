@@ -1,0 +1,180 @@
+---
+title: "Pset 04 - Data Visualization"
+author: "Your Name"
+date: "`r Sys.Date()`"
+format: html
+execute:
+  echo: true   # Show all code
+  eval: true   # Ensure all code runs
+  warning: false
+  message: false
+---
+
+
+```{r eval=TRUE}
+
+library(httr2)
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(ggplot2)
+library(tidyr)
+library(jsonlite)
+# 载入 Census API Key
+source("census-key.R")  # 确保 census-key.R 文件在 p4 目录下
+# funcs.R: 用于下载数据的辅助函数
+
+library(httr2)
+library(jsonlite)
+
+# 定义函数 `get_cdc_data()`
+get_cdc_data <- function(url) {
+  request(url) |> 
+    req_url_query("$limit" = 10000000) |> 
+    req_perform() |> 
+    resp_body_json(simplifyVector = TRUE)
+}
+
+# 确保 census_key 正确加载
+print(census_key)  # 输出 API Key（可选）
+# 定义 API URL
+url <- "https://api.census.gov/data/2021/pep/population"
+
+# 发送请求
+request <- request(url) |> 
+  req_url_query(get = "POP_2020,POP_2021,NAME", `for` = "state:*", key = census_key)
+
+response <- request |> req_perform()
+population <- response |> resp_body_json()
+
+# 转换为 DataFrame
+population_df <- do.call(rbind, population) |> as.data.frame()
+
+# 设置列名
+population_df <- janitor::row_to_names(population_df, row_number = 1)
+
+# 清理人口数据
+population_clean <- population_df |> 
+  rename(state_name = NAME) |> 
+  mutate(
+    state = case_when(
+      state_name == "District of Columbia" ~ "DC",
+      state_name == "Puerto Rico" ~ "PR",
+      TRUE ~ state.abb[match(state_name, state.name)]
+    )
+  ) |> 
+  pivot_longer(
+    cols = starts_with("POP_"), 
+    names_to = "year", 
+    values_to = "population"
+  ) |> 
+  mutate(
+    year = as.numeric(str_remove(year, "POP_")),
+    population = as.numeric(population)
+  )
+
+# 确保 population_clean 存在
+head(population_clean)
+# 生成 `all_dates` 数据框，确保每周数据完整
+all_dates <- data.frame(date = seq(make_date(2020, 1, 25),
+                                   make_date(2021, 12, 31), 
+                                   by = "week")) %>%
+  mutate(
+    date = ceiling_date(date, unit = "week", week_start = 7) - days(1),
+    mmwr_year = epiyear(date),
+    mmwr_week = epiweek(date)
+  )
+
+# 确保 `all_dates` 存在
+head(all_dates)
+
+# 确保每个州都有每周数据
+dates_and_pop <- all_dates |> 
+  tidyr::crossing(state = unique(population_clean$state)) |> 
+  left_join(population_clean, by = c("state", "mmwr_year" = "year"))
+# 载入 CDC API 请求函数
+source("./code/funcs.R")  # 使用相对路径
+
+# CDC 数据集 API
+cases_url <- "https://data.cdc.gov/resource/pwn4-m3yp.json"
+hosp_url <- "https://data.cdc.gov/resource/39z2-9zu6.json"
+deaths_url <- "https://data.cdc.gov/resource/r8kw-7aab.json"
+vax_url <- "https://data.cdc.gov/resource/rh2h-3yt2.json"
+
+# 下载数据
+cases_raw <- get_cdc_data(cases_url)
+hosp_raw <- get_cdc_data(hosp_url)
+deaths_raw <- get_cdc_data(deaths_url)
+vax_raw <- get_cdc_data(vax_url)
+
+# 检查数据
+head(cases_raw)
+head(hosp_raw)
+head(deaths_raw)
+head(vax_raw)
+# 清理 COVID-19 数据
+cases_clean <- cases_raw %>%
+  mutate(
+    date = ymd(str_sub(end_date, 1, 10)),
+    mmwr_week = epiweek(date),
+    mmwr_year = epiyear(date)
+  ) %>%
+  group_by(state, mmwr_year, mmwr_week) %>%
+  summarise(cases = sum(as.numeric(new_cases), na.rm = TRUE), .groups = "drop")
+
+hosp_clean <- hosp_raw %>%
+  mutate(
+    date = ymd(str_sub(collection_date, 1, 10)),
+    mmwr_week = epiweek(date),
+    mmwr_year = epiyear(date)
+  ) %>%
+  group_by(jurisdiction, mmwr_year, mmwr_week) %>%
+  summarise(hosp = sum(as.numeric(new_covid_19_hospital), na.rm = TRUE), .groups = "drop") %>%
+  rename(state = jurisdiction)
+
+deaths_clean <- deaths_raw %>%
+  mutate(
+    date = ymd(str_sub(week_ending_date, 1, 10)),
+    mmwr_week = epiweek(date),
+    mmwr_year = epiyear(date)
+  ) %>%
+  group_by(state, mmwr_year, mmwr_week) %>%
+  summarise(deaths = sum(as.numeric(covid_19_deaths), na.rm = TRUE), .groups = "drop")
+
+vax_clean <- vax_raw %>%
+  filter(date_type == "Admin") %>%
+  mutate(
+    date = ymd(str_sub(date, 1, 10)),
+    mmwr_week = epiweek(date),
+    mmwr_year = epiyear(date)
+  ) %>%
+  group_by(location, mmwr_year, mmwr_week) %>%
+  summarise(
+    vax = sum(as.numeric(series_complete_daily), na.rm = TRUE),
+    booster = sum(as.numeric(booster_daily), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  rename(state = location)
+# 合并数据集
+dat <- dates_and_pop %>%
+  left_join(cases_clean, by = c("state", "mmwr_year", "mmwr_week")) %>%
+  left_join(hosp_clean, by = c("state", "mmwr_year", "mmwr_week")) %>%
+  left_join(deaths_clean, by = c("state", "mmwr_year", "mmwr_week")) %>%
+  left_join(vax_clean, by = c("state", "mmwr_year", "mmwr_week")) %>%
+  arrange(state, date)
+
+# 检查数据
+head(dat)
+# 画出病例、住院、死亡趋势
+dat |> 
+  pivot_longer(c(cases, deaths, hosp), names_to = "outcome", values_to = "rate") |> 
+  mutate(rate = rate / population * 100000) |> 
+  ggplot(aes(date, rate, group = state, color = state)) + 
+  geom_line(alpha = 0.25) + 
+  facet_wrap(~outcome, ncol = 1, scales = 'free_y') + 
+  theme_classic()
+
+
+```
+
+
