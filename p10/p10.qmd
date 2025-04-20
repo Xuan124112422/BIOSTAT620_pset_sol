@@ -1,0 +1,83 @@
+---
+title: "Pset 10 "
+author: "hongye xuan"
+date: "`r Sys.Date()`"
+format: html
+execute:
+  echo: true   # Show all code
+  eval: true   # Ensure all code runs
+  warning: false
+  message: false
+---
+## Introduction
+
+In this problem, I used the MNIST dataset to train a model that predicts digit labels for a set of test images. The training data includes both the images and their corresponding labels, while the test set only has the images. The goal was to build a model using the training data and generate predictions for the test set.
+
+## Approach
+
+I decided to use XGBoost because it's fast, works well for multi-class classification, and is available in R. I used all 60,000 training images and didn’t do any feature reduction or preprocessing, since XGBoost can usually handle that well.
+
+I set up a model with the following parameters:
+
+- 120 rounds
+- max_depth = 8
+- eta = 0.1
+- subsample = 0.9
+- colsample_bytree = 0.8
+
+Before training the final model, I did 5-fold cross-validation to estimate performance. The cross-validated accuracy was about 99.1%, which I thought was good enough to move forward.
+
+
+```{r eval=FALSE}
+# Load and prepare data
+fn <- tempfile()
+download.file("https://github.com/dmcable/BIOSTAT620/raw/refs/heads/main/data/pset-10-mnist.rds", fn)
+dat <- readRDS(fn)
+file.remove(fn)
+
+trainX <- as.matrix(dat$train$images)
+trainY <- dat$train$labels
+testX  <- as.matrix(dat$test$images)
+
+library(xgboost)
+dtrain <- xgb.DMatrix(data = trainX, label = trainY)
+dtest  <- xgb.DMatrix(data = testX)
+
+params <- list(
+  objective = "multi:softmax",
+  num_class = 10,
+  eval_metric = "merror",
+  max_depth = 8,
+  eta = 0.1,
+  subsample = 0.9,
+  colsample_bytree = 0.8
+)
+
+# Cross-validation to estimate accuracy
+set.seed(620)
+cv <- xgb.cv(
+  data = dtrain,
+  params = params,
+  nrounds = 120,
+  nfold = 5,
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+min_error <- min(cv$evaluation_log$test_merror_mean)
+accuracy <- 1 - min_error
+cat("Estimated accuracy:", round(accuracy * 100, 3), "%\n")
+
+# Train the model on the full data
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 120,
+  verbose = 1
+)
+
+# Predict and save
+digit_predictions <- predict(xgb_model, dtest)
+digit_predictions <- as.integer(digit_predictions)
+saveRDS(digit_predictions, file = "digit_predictions.rds")
+```
